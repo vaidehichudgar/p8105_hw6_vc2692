@@ -10,6 +10,9 @@ library(tidyverse)
 library(rvest)
 library(broom)
 library(knitr)
+library(p8105.datasets)
+library(modelr)
+library(knitr)
 
 knitr::opts_chunk$set(
     echo = TRUE,
@@ -46,7 +49,7 @@ homicide_df =
   homicide_df |> 
   unite(city_state, city, state, sep = ", "  ) |> 
   mutate(
-    solved = disposition == "Closed by arrest",
+    solved = as.numeric(disposition == "Closed by arrest"),
     victim_age = as.numeric(victim_age)
     ) |> 
   filter(
@@ -75,7 +78,7 @@ baltimore_model =
   ) |> 
   select(term, OR, CI_lower, CI_upper) |> 
   filter(term == "victim_sexMale") |> 
-  kable()
+  kable(digits = 2)
 
 
 print(baltimore_model)
@@ -123,4 +126,135 @@ OR_all_city |>
 ```
 
 In the plot above, we see that that New York has the lowest odds of solved homicide for males compared to females, after adjusting for victim age and race (OR: 0.26, 95% CI: 0.14, 0.50).  Albuquerque, NM has the highest odds ratio at 1.77 (95% CI: 0.83,3.76).
-Fresno, CA, Stockton, CA, and Albuquerque, NM all have large uncertainty for their estimates. 
+Fresno, CA, Stockton, CA, and Albuquerque, NM all have large uncertainty for their estimates.
+
+## Problem 2
+
+Loading the weather_df dataset.
+
+```{r}
+
+data("weather_df")
+
+```
+
+```{r}
+question_3 =
+  weather_df |> 
+  modelr::bootstrap(n = 5000) |> 
+  mutate(
+    df = map(strap, as_tibble),
+    models = map(df, ~ lm(tmax ~ tmin + prcp, data = .x)),
+    r_squared = map(models, broom::glance),
+    betas = map(models, broom::tidy)
+    ) |> 
+  select(.id, r_squared, betas) |> 
+  unnest(r_squared) |> 
+  select(.id, r.squared, betas) |> 
+  unnest(betas) |> 
+  select(.id, r.squared, term, estimate) |> 
+  pivot_wider(
+    names_from = "term",
+    values_from = "estimate"
+  ) |> 
+  mutate(
+    beta_ratio = tmin / prcp,
+    r_squared = r.squared
+  )
+
+question_3 |> 
+  summarize(
+    ci_lower = quantile(r_squared, 0.025), 
+    ci_upper = quantile(r_squared, 0.975)) |> 
+  kable()
+
+question_3 |> 
+  summarize(
+    ci_lower = quantile(beta_ratio, 0.025), 
+    ci_upper = quantile(beta_ratio, 0.975)) |> 
+  kable()
+
+# r_squared distribution 
+question_3 |> 
+  ggplot(aes(x = r_squared)) + 
+  geom_density()
+
+# beta_ratio distribution
+  question_3 |> 
+  ggplot(aes(x = beta_ratio)) + 
+  geom_density()
+  
+
+```
+
+Through the graphs above show that the r_squared distribution approximately follows a normal distribution with the median around . The ratio of beta_1 and beta_2 however is left skewed, with the median around . 
+
+## Question 3
+
+Read in data and conduct data cleaning steps
+
+```{r}
+birthweight_df =
+  read_csv("data/birthweight.csv", na = c(".", "NA", "")) |> 
+  janitor::clean_names()
+```
+
+```{r}
+birthweight_df |> 
+  ggplot(aes(x = bhead, y = bwt)) +
+  geom_point(alpha = 0.5)
+
+my_model = lm(bwt ~ bhead + blength, data = birthweight_df)
+
+my_model |> 
+  broom::tidy()
+
+birthweight_df |> 
+  modelr::add_residuals(my_model) |> 
+  modelr::add_predictions(my_model) |> 
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point()
+  
+```
+
+```{r}
+
+cross_val_df = 
+  crossv_mc(birthweight_df, 100)
+
+cross_val_df =
+  cross_val_df |> 
+  mutate(
+    train = map(train, as_tibble),
+    test = map(test, as_tibble)
+  )
+
+cross_val_df = 
+  cross_val_df |> 
+  mutate(
+    my_model  = map(train, \(df) lm(bwt ~ bhead + blength, data = birthweight_df)),
+    model_1  = map(train, \(df) lm(bwt ~ blength + gaweeks, data = birthweight_df)),
+    model_2  = map(train, \(df) lm(bwt ~ bhead * blength * babysex, data = birthweight_df))) |> 
+  mutate(
+    rmse_mymodel = map2_dbl(my_model, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_model1 = map2_dbl(model_1, test, \(mod, df) rmse(model = mod, data = df)),
+    rmse_model2 = map2_dbl(model_2, test, \(mod, df) rmse(model = mod, data = df)))
+```
+
+```{r}
+cross_val_df |> 
+  select(starts_with("rmse")) |> 
+  pivot_longer(
+    everything(),
+    names_to = "model",
+    values_to = "rmse",
+    names_prefix = "rmse_"
+  ) |> 
+  ggplot(aes(x = model, y = rmse)) + 
+  geom_violin()
+```
+
+
+my model: pre preg bmi, smoknig, gestational age at birth, height
+model 1: length at birth, gestational age
+model 2: head circ, length, sex, interactions
